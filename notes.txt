@@ -1,0 +1,184 @@
+## Consensus 
+
+> Involves multiple servers agreeing on values. Decision on value is final.
+> Not all servers have to be avaiable. 
+> Each server has a state machine and a log.
+    - the state machine should be fault-tolerant e.g. hash table. Clients have the
+        impression as if they were interacting with a single state machine. 
+> State machine takes input commands from its logs. Log includes commands such as
+    set x to 3. Consensus is used to agree on the commands in the logs.
+> Consensus ensures that if ant state machine applues x to 3 as the n'th command
+    no other state machine will ever apply a different n'th command.
+
+
+## https://medium.com/@jitenderkmr/understanding-raft-algorithm-consensus-and-leader-election-explained-faadf28fd047
+
+### Core Concepts:
+
+> Network is composed of several servers/nodes
+> Leader: one server in the network is seleted as a leader and is responsible for 
+    managing the replication logs 
+> Follower: nodes in the server, respond to requests from the leader and forward client request to the leader
+> Candidate: if leader fails, new one must me elected. Nodes transition to the candidate and initiate an election
+> Term: raft operatres in term, where each term starts with election and ends with new leader
+> Log Replication: raft ensures that all logs across the network are repolcated and mantained in the same order 
+
+Goal of Raft is to achive consensus among nodes in the cluster regarding state of the system
+
+### Leader Election
+
+1. At the begging of each term nodes start as followers
+2. If a follower does not hear from leader for certain period it transitions to the candidate state
+3. The candidate requests votes from other nodes. If it recives votes from the majority it becomes the leader 
+4. In no node receives a majority  a new election is started in the next term 
+
+### Log Replication and Consistency 
+
+1. The leader accepts client requests and appends them to its log
+2. It then sends the log entry to followers, which replicate the log entry 
+3. Once the majority of followers acknowledge the entry it is commiteted to the log and applied to the state machine 
+
+
+### Consensus 
+
+Consensus is achived through a series of stepes 
+
+1. Log Replication
+    - when a client initiates operation the leader node receives the request
+    - leader appends the operation to its log and broadcasts this log entry to all other nodes 
+    - each node appends the entry to its logs 
+2. Majority agreement
+    - before commiting an operation to its state machine, the leader waits for ack from most nodes 
+    - if most of nodes ack the operation by replication it in their logs, the leader commits the operation to its state
+        machine
+    - this ensures that the operation is officailly partt of the systems state and will be applied across all nodes 
+The leader regularly sends updates to the other servers to keep them in sync. To ensture that event if server falls begind or crashes
+    is can quickly catch up with the latest state of the key-value store 
+
+### Syncing with Peer Nodes 
+
+Syncing with peer nodes is a crucial aspect of Rafts design to maintain consistencty.
+
+1. Syncing New Servers 
+    - when a new sever joins the network, it needs to catch ip with current state of kv store
+    - the leader sends a series of log entres to the new server ensuring that is ghas a coplete copy of the log 
+    - logs include all previous operations
+
+2. Determinig logs for sync-up:
+    - the leader server determines which logs to send based on the last ack log index for each peer node 
+    - if a peer node has acked logs up to index i the leader sends logsw from index i+1 to the last log
+    - this proces ensures that new server will receive all operations it missed and brings it up to date with the lates state of kv store
+3. Handling sync-up errors
+    - if the leader node is not aware of the last ack log index of a peer note it uses hit-and-trial approach
+    - the leader starts from the end of its log index and decrement the index based on the reposnse from peer node 
+    - if the peer node does not have the logs before the index sent as part of the sync-up request it returns and error 
+    - this iterative process ensures that the new server receives te correct logs for syncing 
+This sync-up process should be triggered at a pre-defined interaval, taking into account factors such as the numbers of nodes in the system
+and the frequency of node additions or removals. Lets say the the interval is 3 secods, it means that the leader server sends
+a sync-up message every 3 seconds to ensure all peer nodes are up to date. 
+
+### Leader Election
+
+In case he leader node fails, peer nodes monitor for a sync-up request from the leader within defined interval.
+If interval exeeded, a peer node assumes leadership is unavaiable and triggers a leader election. It requests votes from 
+other nodes and upon receiving a majority announes itself as the new leader. Each node randomizes its threshold
+to prevent simultaneous elections. This threshold must exceed sync-up interval to prevent premarue leader declarations.
+
+
+## In Search of an Understandable Consensus Algorithm
+
+
+### Key Properties
+
+1. Election safety: at most one leader can be elected in a given term
+2. Leader append-only: a leader never overwrites or deletes entries in its log, only appends new entries
+3. Log  matching: if two logs contain an entry with the same index and term, then the logs 
+    are identical in all entries up through the given index 
+4. Leader completeness: if a log entry is commited in a given term, then that entry will be present in the 
+    logs of the leader for all higher-numbered terms.
+5. State machine safety: if a server has applied a log entry at given index to its tate machine, no other
+    server will every apply a differen log entry to the same index 
+
+
+### Raft basics
+
+> Each server is in one of the following states: follower, candidate, leader 
+> Follower are passive, the responds to requests from leaders 
+> Time is divded into terms of arbitrary length. 
+
+election - normal operations |   election - normal operation    ->
+            term1            |            term2                 ->
+
+
+> Terms are indexed with integers and begin with and election. There has to be one leader at given term.
+Each server stores a current term number, which increases monotonically over time.  Current terms are exchanged
+whenever servers communicate; if one server’s current term is smaller than the other’s, then it updates its current
+term to the larger value. If a candidate or leader discovers that its term is out of date, it immediately reverts to follower state.
+
+> RPC is used to communiacte between servers; only two types of requests are required: [RequestVote] is initiated by candidates during the election
+and [AppendEntries] are initiadted by leaders to replicate log entries and provide a form of heartbeat.  
+
+> Raft uses a hearbeat mechainsm to trigger leader election. At the start the server is follower, and remains in the state as long as it 
+receives valid RPCs from a leader or candidate. Leaders send periodic hearbeats [empty AppendEntries] to all followers to maintain authority.
+
+> If a follower receives no communication over a period of time called the election timeout, then it assumes there 
+is no viable leader and begins an election to choose a new leader
+
+### Beggining election
+
+> To begin an election, a follower increments its current term and transitions to candidate state. It then votes for
+itself and issues RequestVote RPCs in parallel to each of the other servers in the cluster. A candidate continues in
+this state until one of three things happens:
+ (a) it wins the election
+ (b) another server establishes itself as leader 
+ (c) a period of time goes by with no winner. These outcomes are discussed separately in the paragraphs below
+A candidate wins an election if it receives votes from a majority of the servers in the full cluster for the same
+term. Each server votes for one candidate on a first-come-first-served basis.
+Once a candidate wins an election, it becomes leader. It then sends heartbeat messages to all of
+the other servers to establish its authority and prevent new elections. 
+
+> If server is waiting for votes and it receives AppendEntries RPC from server claiming to be the leader it checks its term index. If its 
+as large as the candidate current term then the candiadte recognizes the leader and returns to follower. If index is smaller then request 
+is rejected. 
+
+> Raft uses randomized election timeouts to ensure that split votes are rare and that they are resolved quickly. To
+prevent split votes in the first place, election timeouts are chosen randomly from a fixed interval (e.g., 150–300ms).
+
+> Each candidate restarts its randomized election timeout at the start of an election. 
+
+
+### Log replication 
+
+> When client issues a request leader appends log entry to its logs  and then issues AppendEntries in parallel to each searver. 
+    When the log entry is replicated it is applied to the leader states machine. If follower fails then request is resend untill all followers 
+    store log entries.  
+
+>  The term numbers in log entries are used to detect inconsistencies between logs and to ensure some of the properties.
+    Each log entry also has an integer index identifying its position in the log
+> Raft guarantees that committed entries are durable and will eventually be executed by all of the available state machines.
+> A log entry is committed once the leader that created the entry has replicated it on a majority of the server. 
+> The leader keeps track of the highest index it knows to be committed, and it includes that index in future
+    AppendEntries RPCs (including heartbeats) so that the other servers eventually find out. Once a follower learns
+    that a log entry is committed, it applies the entry to its local state machine (in log order).
+
+> If two entries in different logs have the same index and term, then they store the same command.
+> If two entries in different logs have the same index and term, then the logs are identical in all preceding entries.
+
+> The second property is guaranteed by a simple consistency check performed by AppendEntries. When sending an AppendEntries RPC,
+    the leader includes the index and term of the entry in its log that immediately precedes
+    the new entries. If the follower does not find an entry in its log with the same index and term, then it refuses the new entries.
+
+> In Raft, the leader handles inconsistencies by forcing the followers’ logs to duplicate its own. This means that
+    conflicting entries in follower logs will be overwritten with entries from the leader’s log.
+
+> To bring a follower’s log into consistency with its own, the leader must find the latest log entry where the two
+    logs agree, delete any entries in the follower’s log after that point, and send the follower all of the leader’s entries
+    after that point. All of these actions happen in response to the consistency check performed by AppendEntries
+    RPCs. The leader maintains a nextIndex for each follower, which is the index of the next log entry the leader will
+    send to that follower. When a leader first comes to power, it initializes all nextIndex values to the index just after the
+    last one in its log (11 in Figure 7). If a follower’s log is inconsistent with the leader’s,
+    the AppendEntries consistency check will fail in the next AppendEntries RPC. After a rejection, the leader decrements nextIndex and retries
+    the AppendEntries RPC. Eventually nextIndex will reach a point where the leader and follower logs match. When
+    this happens, AppendEntries will succeed, which removes any conflicting entries in the follower’s log and appends
+    entries from the leader’s log (if any). Once AppendEntries succeeds, the follower’s log is consistent with the leader’s,
+    and it will remain that way for the rest of the term
