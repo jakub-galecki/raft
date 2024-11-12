@@ -7,7 +7,7 @@ type RequestVote struct {
 	LastLogTerm  int // term of candidate’s last log entry
 }
 
-type RequestVoteResult struct {
+type RequestVoteResponse struct {
 	Term        int // currentTerm, for candidate to update itself
 	VoteGranted int // true means candidate received vote
 }
