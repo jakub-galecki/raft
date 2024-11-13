@@ -7,7 +7,7 @@ import (
 )
 
 func Test_ReadConfig(t *testing.T) {
-	file := "../testdata/config.yaml"
+	file := "../testdata/test_readConfig.yaml"
 	c, err := ReadConfig(file)
 	assert.NoError(t, err)
 	assert.Len(t, c.Nodes, 2)

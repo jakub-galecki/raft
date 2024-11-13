@@ -1,9 +1,10 @@
+dir: "/tmp/raft/"
 nodes:
   - node_1:
     id: 1
-    address: 123
-    port: 14
+    address: localhost
+    port: 2000
   - node_2:
     id: 2
-    address: 123
-    port: 15
+    address: localhost
+    port: 2001

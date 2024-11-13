@@ -19,6 +19,7 @@ func (n *Node) GetAddress() string {
 }
 
 type Config struct {
+    Dir string `yaml:"dir"` 
 	Nodes []Node
 }
 
