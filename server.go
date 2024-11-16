@@ -3,17 +3,14 @@ package server
 import (
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path"
 	"sync"
 	"sync/atomic"
 
 	rpcx "github.com/smallnest/rpcx/server"
-	"github.com/vmihailenco/msgpack/v5"
 
 	"github.com/raft/config"
-	"github.com/raft/model"
 )
 
 type Server struct {
@@ -36,20 +33,8 @@ type Server struct {
 		*config.Config
 		node *config.Node
 	}
-}
 
-type state struct {
-	CurrentTerm atomic.Uint64 // latest term server has seen (initialized to 0 on first boot, increases monotonically)
-	VotedFor    atomic.Uint32 // candidateId that received vote in current term (or null if none)
-
-	// log should be accessed with mutex locked
-	Log []model.Entry
-
-	w *os.File // underlying file
-}
-
-func (s *Server) serializeState() ([]byte, error) {
-	return msgpack.Marshal(s.state)
+	exitChan chan struct{}
 }
 
 func (s *Server) logState() error {
@@ -57,17 +42,7 @@ func (s *Server) logState() error {
 	if path == "" {
 		return errors.New("directory not specified in config")
 	}
-	raw, err := s.serializeState()
-	if err != nil {
-		return err
-	}
-	err = s.state.w.Truncate(0)
-	if err != nil {
-		return err
-	}
-	s.state.w.Seek(0, io.SeekStart)
-	_, err = s.state.w.Write(raw)
-	if err != nil {
+	if err := s.state.write(); err != nil {
 		return err
 	}
 	return nil
@@ -75,12 +50,11 @@ func (s *Server) logState() error {
 
 func (s *Server) startRPCServer() error {
 	rpcServer := rpcx.NewServer()
-	rpcServer.Register(s, "")
-	err := rpcServer.Serve("tcp", s.config.node.GetAddress())
-	if err != nil {
+	if err := rpcServer.Register(s, ""); err != nil {
 		return err
 	}
 	s.rpc = rpcServer
+	go rpcServer.Serve("tcp", s.config.node.GetAddress())
 	return nil
 }
 
@@ -101,31 +75,47 @@ func NewServer(id int, conf *config.Config) (*Server, error) {
 	return s, nil
 }
 
+func (s *Server) Listen() {
+	for {
+		select {
+		case <-s.exitChan:
+			return
+		}
+	}
+}
+
+func (s *Server) Close() error {
+	s.exitChan <- struct{}{}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.logState(); err != nil {
+		return err
+	}
+	if err := s.rpc.Close(); err != nil {
+		return err
+	}
+	return nil
+}
+
 // try to read config file from disk
 func (s *Server) initInternal() error {
-	path := s.getUnderlyingFilePath()
-	if path == "" {
+	if s.config.Dir == "" {
 		return errors.New("directory not specified in config")
 	}
-
-	if _, err := os.Stat(path); os.IsNotExist(err) {
+	if _, err := os.Stat(s.config.Dir); os.IsNotExist(err) {
 		// newly created file for server
-		err := s.ensureDir(path)
+		err := s.ensureDir(s.config.Dir)
 		if err != nil {
 			return err
 		}
-		f, err := os.OpenFile("", os.O_CREATE|os.O_RDWR|os.O_SYNC, os.ModePerm)
-		if err != nil {
-			return err
-		}
-		s.state.w = f
-		return nil
 	} else if err != nil {
-		return nil
+		return err
 	}
-
-	// read file
-
+	st, err := newState(s.getUnderlyingFilePath())
+	if err != nil {
+		return err
+	}
+	s.state = st
 	return nil
 }
 
