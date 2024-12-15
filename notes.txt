@@ -182,3 +182,9 @@ prevent split votes in the first place, election timeouts are chosen randomly fr
     this happens, AppendEntries will succeed, which removes any conflicting entries in the follower’s log and appends
     entries from the leader’s log (if any). Once AppendEntries succeeds, the follower’s log is consistent with the leader’s,
     and it will remain that way for the rest of the term
+
+######## Additional Resources
+
+- https://igupta.in/blog/notes-on-raft/
+- https://en.wikipedia.org/wiki/Raft_(algorithm)
+- https://www.sahilmalhotra.com/blog/raft-notes

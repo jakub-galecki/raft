@@ -3,10 +3,12 @@ package server
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	rpcx "github.com/smallnest/rpcx/server"
 
@@ -34,7 +36,10 @@ type Server struct {
 		node *config.Node
 	}
 
-	exitChan chan struct{}
+	nodes []*innerNode
+
+	electionTicker *time.Ticker
+	exitChan       chan struct{}
 }
 
 func (s *Server) logState() error {
@@ -54,7 +59,10 @@ func (s *Server) startRPCServer() error {
 		return err
 	}
 	s.rpc = rpcServer
-	go rpcServer.Serve("tcp", s.config.node.GetAddress())
+	go func() {
+		// todo: handle error
+		_ = rpcServer.Serve("tcp", s.config.node.GetAddress())
+	}()
 	return nil
 }
 
@@ -66,6 +74,8 @@ func NewServer(id int, conf *config.Config) (*Server, error) {
 	s := &Server{id: id}
 	s.config.Config = conf
 	s.config.node = &node
+	s.nodes = initNodes(conf)
+	s.electionTicker = time.NewTicker(1 * time.Second)
 	if err := s.initInternal(); err != nil {
 		return nil, err
 	}
@@ -73,6 +83,21 @@ func NewServer(id int, conf *config.Config) (*Server, error) {
 		return nil, err
 	}
 	return s, nil
+}
+
+func (s *Server) startElectionWorker() {
+	for {
+        select {
+            case <-s.electionTicker.C:
+                slog.Debug("Election ticker ")
+            default:
+        }
+	}
+}
+
+func (s *Server) elect() {
+     
+
 }
 
 func (s *Server) Listen() {
