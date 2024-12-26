@@ -12,7 +12,7 @@ import (
 
 type state struct {
 	CurrentTerm atomic.Uint64 // latest term server has seen (initialized to 0 on first boot, increases monotonically)
-	VotedFor    atomic.Uint64 // candidateId that received vote in current term (or null if none)
+	VotedFor    atomic.Int32  // candidateId that received vote in current term (or null if none)
 
 	// log should be accessed with mutex locked
 	Log []model.Entry
@@ -32,15 +32,15 @@ func (s *state) increaseCurrentTerm() uint64 {
 	return s.CurrentTerm.Add(1)
 }
 
-func (s *state) getVotedFor() uint64 {
-	return s.VotedFor.Load()
+func (s *state) getVotedFor() int {
+	return int(s.VotedFor.Load())
 }
 
-func (s *state) setVotedFor(term uint64) {
-	s.VotedFor.Store(term)
+func (s *state) setVotedFor(term int) {
+	s.VotedFor.Store(int32(term))
 }
 
-func (s *state) increaseVotedFor() uint64 {
+func (s *state) increaseVotedFor() int32 {
 	return s.VotedFor.Add(1)
 }
 

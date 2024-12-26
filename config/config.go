@@ -6,12 +6,28 @@ import (
 	"os"
 
 	"gopkg.in/yaml.v3"
+
+	rpcx "github.com/smallnest/rpcx/client"
 )
+
+// todo: close connection
 
 type Node struct {
 	Id      int    `yaml:"id"`
 	Address string `yaml:"address"`
 	Port    string `yaml:"port"`
+
+	Conn rpcx.XClient
+}
+
+func (n *Node) Connect() error {
+	addr := n.GetAddress()
+	d, err := rpcx.NewPeer2PeerDiscovery("tcp@"+addr, "")
+	if err != nil {
+		return err
+	}
+	n.Conn = rpcx.NewXClient("", rpcx.Failover, rpcx.RandomSelect, d, rpcx.DefaultOption)
+	return nil
 }
 
 func (n *Node) GetAddress() string {
@@ -19,7 +35,7 @@ func (n *Node) GetAddress() string {
 }
 
 type Config struct {
-    Dir string `yaml:"dir"` 
+	Dir   string `yaml:"dir"`
 	Nodes []Node
 }
 

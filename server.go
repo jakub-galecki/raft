@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -13,6 +14,19 @@ import (
 	rpcx "github.com/smallnest/rpcx/server"
 
 	"github.com/raft/config"
+	"github.com/raft/model"
+)
+
+type ServerRole uint8
+
+const (
+	Leader ServerRole = iota
+	Follower
+	Candidate
+)
+
+const (
+	electionTickerDuration = 1 * time.Second
 )
 
 type Server struct {
@@ -26,8 +40,8 @@ type Server struct {
 	lastApplied atomic.Uint64 // index of highest log entry applied to state machine (initialized to 0, increases monotonically)
 
 	// on leader
-	nextIndex  []uint64 // for each server, index of the next log entry to send to that server (initialized to leader last log index + 1)
-	matchIndex []uint64 // for each server, index of highest log entry known to be replicated on server (initialized to 0, increases monotonically)
+	nextIndex  []int // for each server, index of the next log entry to send to that server (initialized to leader last log index + 1)
+	matchIndex []int // for each server, index of highest log entry known to be replicated on server (initialized to 0, increases monotonically)
 
 	rpc *rpcx.Server
 
@@ -40,6 +54,9 @@ type Server struct {
 
 	electionTicker *time.Ticker
 	exitChan       chan struct{}
+	role           ServerRole
+
+	l *slog.Logger
 }
 
 func (s *Server) logState() error {
@@ -61,9 +78,16 @@ func (s *Server) startRPCServer() error {
 	s.rpc = rpcServer
 	go func() {
 		// todo: handle error
-		_ = rpcServer.Serve("tcp", s.config.node.GetAddress())
+		err := rpcServer.Serve("tcp", s.config.node.GetAddress())
+		if err != nil {
+			panic(err)
+		}
 	}()
 	return nil
+}
+
+func (s *Server) resetElectionTicker() {
+	s.electionTicker.Reset(electionTickerDuration)
 }
 
 func NewServer(id int, conf *config.Config) (*Server, error) {
@@ -74,30 +98,141 @@ func NewServer(id int, conf *config.Config) (*Server, error) {
 	s := &Server{id: id}
 	s.config.Config = conf
 	s.config.node = &node
+
+	// todo: take level from some config...
+	s.l = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
 	s.nodes = initNodes(conf)
-	s.electionTicker = time.NewTicker(1 * time.Second)
+	s.electionTicker = time.NewTicker(electionTickerDuration)
+	s.role = Follower
 	if err := s.initInternal(); err != nil {
 		return nil, err
 	}
 	if err := s.startRPCServer(); err != nil {
 		return nil, err
 	}
+	go s.startElectionWorker()
 	return s, nil
 }
 
+func (s *Server) isLeader() bool {
+	return s.role == Leader
+}
+
 func (s *Server) startElectionWorker() {
-	for {
-        select {
-            case <-s.electionTicker.C:
-                slog.Debug("Election ticker ")
-            default:
-        }
+	for range s.electionTicker.C {
+		slog.Debug("Election ticker")
+
+		if s.isLeader() {
+			// no point to start election from leader
+			s.resetElectionTicker()
+			break
+		}
+
+		func() {
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			err := s.elect()
+			if err != nil {
+				s.l.Error("error during election")
+			}
+		}()
 	}
 }
 
-func (s *Server) elect() {
-     
+func (s *Server) getLastLogIndex() int {
+	return len(s.state.Log) - 1
+}
 
+func (s *Server) getLogTermAt(index int) int {
+	if index > len(s.state.Log) {
+		return -1
+	}
+	return s.state.Log[index].Term
+}
+
+// elect is responsible for starting new election where caller
+// is candidate. s.mu must be held by the caller
+func (s *Server) elect() error {
+	s.resetElectionTicker()
+
+	var (
+		lastLogIndex = s.getLastLogIndex()
+		lastLogTerm  = s.getLogTermAt(lastLogIndex)
+		term         = s.state.CurrentTerm.Add(1)
+		total        = 1
+	)
+
+	s.role = Candidate
+	s.state.VotedFor.Store(int32(s.id))
+
+	s.l.Debug("starting election", slog.Int("server", s.id))
+
+	req := model.RequestVote{
+		Term:         term,
+		CandidateId:  s.id,
+		LastLogIndex: lastLogIndex,
+		LastLogTerm:  lastLogTerm,
+	}
+
+	// todo: run in parallel
+	for _, n := range s.nodes {
+		var (
+			reply       model.RequestVoteResponse
+			ctx, cancel = context.WithTimeout(context.Background(), 50*time.Millisecond)
+		)
+		defer cancel()
+		err := n.Conn.Call(ctx, "Vote", req, &reply)
+		if err != nil {
+			s.l.Error("error while calling node", slog.String("node", n.GetAddress()), slog.String("err", err.Error()))
+			// throwing here error would be bad as we want to proceed with raft
+			// even with some nodes are down. Just continue to the next node
+			continue
+		}
+
+		if s.role != Candidate {
+			s.l.Debug("role changed during election while waiting for reponse", slog.Int("server", s.id))
+			return nil
+		}
+
+		if uint64(reply.Term) < term {
+			s.l.Debug("rejecting rpc reposne as term is smaller", slog.Int("server", s.id),
+				slog.Uint64("received_term", reply.Term),
+				slog.Uint64("term", term))
+		} else if uint64(reply.Term) > term {
+			// todo: transition to follower role
+			s.transistionToFollower(uint64(reply.Term))
+		} else { // reply.Term == term
+			if !reply.VoteGranted {
+				continue
+			}
+			total += 1
+			if total*2 > len(s.nodes)+1 {
+				s.l.Debug("election success", slog.Int("server", s.id))
+				s.transitionToLeader()
+				return nil
+			}
+		}
+
+	}
+
+	return nil
+}
+
+func (s *Server) transitionToLeader() {
+	s.role = Leader
+	for i := range s.nodes {
+		s.nextIndex[i] = len(s.state.Log)
+		s.matchIndex[i] = -1
+	}
+	go s.startSendingHearbeats(time.NewTicker(50 * time.Millisecond))
+}
+
+func (s *Server) transistionToFollower(term uint64) {
+	s.resetElectionTicker()
+	s.role = Follower
+	s.state.CurrentTerm.Store(term)
+	s.state.VotedFor.Store(-1)
 }
 
 func (s *Server) Listen() {
@@ -160,4 +295,14 @@ func (s *Server) getUnderlyingFilePath() string {
 		return ""
 	}
 	return path.Join(s.config.Dir, name)
+}
+
+func (s *Server) appendEntries() {}
+
+func (s *Server) startSendingHearbeats(c *time.Ticker) {
+	s.appendEntries()
+
+	for range c.C {
+		s.appendEntries()
+	}
 }

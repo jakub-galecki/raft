@@ -2,7 +2,7 @@ package model
 
 // Invoked by candidates to gather votes
 type AppendEntriesRequest struct {
-	Term         int     // leader’s term
+	Term         uint64  // leader’s term
 	LeaderId     int     // so follower can redirect clients
 	PrevLogIndex int     // index of log entry immediately preceding new ones
 	PrevLogTerm  int     // term of prevLogIndex entry
@@ -11,8 +11,8 @@ type AppendEntriesRequest struct {
 }
 
 type AppendEntriesResponse struct {
-	Term    int // currentTerm, for leader to update itself
-	Success int // true if follower contained entry matching prevLogIndex and prevLogTerm
+	Term    uint64 // currentTerm, for leader to update itself
+	Success bool   // true if follower contained entry matching prevLogIndex and prevLogTerm
 }
 
 /*

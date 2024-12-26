@@ -1,15 +1,15 @@
 package model
 
 type RequestVote struct {
-	Term         int // candidate’s term
-	CandidateId  int //candidate requesting vote
-	LastLogIndex int // index of candidate’s last log entry
-	LastLogTerm  int // term of candidate’s last log entry
+	Term         uint64 // candidate’s term
+	CandidateId  int    //candidate requesting vote
+	LastLogIndex int    // index of candidate’s last log entry
+	LastLogTerm  int    // term of candidate’s last log entry
 }
 
 type RequestVoteResponse struct {
-	Term        int // currentTerm, for candidate to update itself
-	VoteGranted int // true means candidate received vote
+	Term        uint64 // currentTerm, for candidate to update itself
+	VoteGranted bool   // true means candidate received vote
 }
 
 /*
