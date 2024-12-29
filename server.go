@@ -34,7 +34,7 @@ func (sr ServerRole) String() string {
 	case Candidate:
 		return "candidate"
 	}
-    return ""
+	return ""
 }
 
 const (
@@ -163,24 +163,103 @@ func (s *Server) getLogTermAt(index int) int {
 	return s.state.Log[index].Term
 }
 
-func (s *Server) appendEntries() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+func (s *Server) appendEntriesLeader() {
+	func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if s.role != Leader {
+			s.l.Warn("appendEntries invoked on non leader", slog.String("role", s.role.String()))
+			return
+		}
+	}()
 
-	if s.role != Leader {
-		s.l.Warn("appendEntries invoked on non leader", slog.String("role", s.role.String()))
-        return
+	getEntiresFromIndex := func(i int) []model.Entry {
+		if i < len(s.state.Log)-1 {
+			return []model.Entry{s.state.Log[i]}
+		}
+		return []model.Entry{}
 	}
 
+	term := s.state.getCurrentTerm()
+	for i := range s.nodes {
+		n := s.nodes[i]
+		go func() {
+			s.mu.Lock()
+			var (
+				nextIndex, prevIndex = s.nextIndex[i], s.nextIndex[i] - 1
+				prevTerm             = s.state.Log[prevIndex].Term
+				ents                 = getEntiresFromIndex(nextIndex)
+			)
+			req := model.AppendEntriesRequest{
+				Term:         term,
+				LeaderId:     s.id,
+				PrevLogIndex: prevIndex,
+				PrevLogTerm:  prevTerm,
+				Entries:      ents,
+				LeaderCommit: s.commitIndex.Load(),
+			}
+			s.mu.Unlock()
+			var response model.AppendEntriesResponse
+			err := n.Conn.Call(context.Background(), "AppendEntries", req, &response)
+			if err != nil {
+				s.l.Error("error during AppendEntries", slog.String("err", err.Error()))
+				return
+			}
+			s.mu.Lock()
+			if response.Term > term {
+				s.l.Debug("Received bigger term in append entries response. Transition to follower",
+					slog.Int("server", s.id),
+					slog.Uint64("current_term", term),
+					slog.Uint64("received_term", response.Term))
+				s.transistionToFollower(response.Term)
+				s.mu.Unlock()
+				return
+			}
 
-    term := s.state.getCurrentTerm()
+			if response.Success {
+				var (
+					newNextIndex = nextIndex + len(ents)
+					commitIndex  = s.commitIndex.Load()
+				)
+				s.nextIndex[i] = newNextIndex
+				s.matchIndex[i] = newNextIndex - 1
 
-    for i := range s.nodes {
-        n := s.nodes[i]
-        
+				for j := commitIndex + 1; j < uint64(len(s.state.Log)); j++ {
+					if uint64(s.state.Log[j].Term) == s.state.getCurrentTerm() {
+						if s.reachedLogQuorum(j) {
+							s.commitIndex.Store(j)
+						}
+					}
+				}
 
+				if s.commitIndex.Load() > commitIndex {
+					// todo: trigger applying to state machine
+				}
+			}
+			s.mu.Unlock()
+		}()
+	}
+}
 
-    }
+func (s *Server) reachedLogQuorum(i uint64) bool {
+	enoughVotes := func(c int) bool {
+		if c*2 >= len(s.nodes) {
+			return true
+		}
+		return false
+	}
+
+	nodesCount := 1
+	for j := range s.nodes {
+		if uint64(s.matchIndex[j]) >= i {
+			nodesCount++
+		}
+
+		if enoughVotes(nodesCount) {
+			return true
+		}
+	}
+	return false
 }
 
 // elect is responsible for starting new election where caller
