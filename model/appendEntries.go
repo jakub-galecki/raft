@@ -7,7 +7,7 @@ type AppendEntriesRequest struct {
 	PrevLogIndex int     // index of log entry immediately preceding new ones
 	PrevLogTerm  int     // term of prevLogIndex entry
 	Entries      []Entry // log entries to store (empty for heartbeat; may send more than one for efficiency)
-	LeaderCommit int     //leader’s commitIndex
+	LeaderCommit uint64  //leader’s commitIndex
 }
 
 type AppendEntriesResponse struct {

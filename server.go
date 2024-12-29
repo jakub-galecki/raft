@@ -25,6 +25,18 @@ const (
 	Candidate
 )
 
+func (sr ServerRole) String() string {
+	switch sr {
+	case Leader:
+		return "leader"
+	case Follower:
+		return "follower"
+	case Candidate:
+		return "candidate"
+	}
+    return ""
+}
+
 const (
 	electionTickerDuration = 1 * time.Second
 )
@@ -149,6 +161,26 @@ func (s *Server) getLogTermAt(index int) int {
 		return -1
 	}
 	return s.state.Log[index].Term
+}
+
+func (s *Server) appendEntries() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.role != Leader {
+		s.l.Warn("appendEntries invoked on non leader", slog.String("role", s.role.String()))
+        return
+	}
+
+
+    term := s.state.getCurrentTerm()
+
+    for i := range s.nodes {
+        n := s.nodes[i]
+        
+
+
+    }
 }
 
 // elect is responsible for starting new election where caller
