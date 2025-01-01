@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/raft/db"
 	"log/slog"
 	"os"
 	"path"
@@ -67,13 +68,16 @@ type Server struct {
 	electionTicker *time.Ticker
 	exitChan       chan struct{}
 	role           ServerRole
+	commitChan     chan struct{}
+
+	stateMachine db.StateMachine
 
 	l *slog.Logger
 }
 
 func (s *Server) logState() error {
-	path := s.getUnderlyingFilePath()
-	if path == "" {
+	filePath := s.getUnderlyingFilePath()
+	if filePath == "" {
 		return errors.New("directory not specified in config")
 	}
 	if err := s.state.write(); err != nil {
@@ -233,11 +237,26 @@ func (s *Server) appendEntriesLeader() {
 				}
 
 				if s.commitIndex.Load() > commitIndex {
-					// todo: trigger applying to state machine
+					//todo: trigger applying to state machine
+					s.commitChanges()
 				}
 			}
 			s.mu.Unlock()
 		}()
+	}
+}
+
+func (s *Server) commitChanges() {
+	lastApplied, commitIndex := s.lastApplied.Load(), s.commitIndex.Load()
+	if commitIndex > lastApplied {
+		entries := s.state.Log[lastApplied+1 : commitIndex]
+		for _, e := range entries {
+			_, err := s.stateMachine.Apply(e.Command)
+			if err != nil {
+				s.l.Error("error during apply", slog.String("err", err.Error()))
+			}
+		}
+		s.lastApplied.Store(s.commitIndex.Load())
 	}
 }
 
@@ -300,12 +319,10 @@ func (s *Server) elect() error {
 			// even with some nodes are down. Just continue to the next node
 			continue
 		}
-
 		if s.role != Candidate {
 			s.l.Debug("role changed during election while waiting for reponse", slog.Int("server", s.id))
 			return nil
 		}
-
 		if uint64(reply.Term) < term {
 			s.l.Debug("rejecting rpc reposne as term is smaller", slog.Int("server", s.id),
 				slog.Uint64("received_term", reply.Term),
@@ -326,7 +343,6 @@ func (s *Server) elect() error {
 		}
 
 	}
-
 	return nil
 }
 

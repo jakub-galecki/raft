@@ -62,11 +62,11 @@ func (s *Server) AppendEntries(ctx context.Context, req model.AppendEntriesReque
 			res.Success = true
 			if s.appendInternal(req.PrevLogIndex+1, req.Entries) {
 				if req.LeaderCommit > s.commitIndex.Load() {
-                    s.commitIndex.Store(min(req.LeaderCommit, uint64(len(s.state.Log)-1)))
+					s.commitIndex.Store(min(req.LeaderCommit, uint64(len(s.state.Log)-1)))
 				}
-                if err := s.logState(); err != nil {
-                    return err
-                }
+				if err := s.logState(); err != nil {
+					return err
+				}
 			}
 		}
 	}
